@@ -7,15 +7,84 @@ import (
 	"os"
 )
 
-// Только чтобы прокидывать в функцию префикс. Принимает параметры и прокидывает их во внутреннюю функцию.
-// В golang нет аргументов по умолчанию, поэтому тесты бы не сработали, если я бы добавил аргумент
-// в основную функцию
-func dirTree(out io.Writer, path string, printFiles bool) error {
-	err := dirTreeInner(out, path, printFiles, new(bytes.Buffer))
-	return err
+// Не придумал названия лучше :/
+type ObjectInDir interface {
+	IsDir() bool
+	fmt.Stringer
 }
 
-// Удаляет все файлы из среза директории, вызывается только если проставлен флаг
+type File struct {
+	Name string
+	Size int64
+}
+
+func (f *File) IsDir() bool {
+	return false
+}
+
+func (f *File) String() string {
+	sizeString := "empty"
+	if size := f.Size; size > 0 {
+		sizeString = fmt.Sprintf("%db", size)
+	}
+
+	return fmt.Sprintf("%s (%s)", f.Name, sizeString)
+}
+
+type Directory struct {
+	Name string
+}
+
+func (d *Directory) IsDir() bool {
+	return true
+}
+
+func (d *Directory) String() string {
+	return d.Name
+}
+
+func ConvertDirEntryToObjectInDir(dirEntry *os.DirEntry) (ObjectInDir, error) {
+	if (*dirEntry).IsDir() {
+		return &Directory{
+			Name: (*dirEntry).Name(),
+		}, nil
+	}
+
+	fileInfo, err := (*dirEntry).Info()
+	if err != nil {
+		return nil, err
+
+	}
+
+	return &File{
+		Name: (*dirEntry).Name(),
+		Size: fileInfo.Size(),
+	}, nil
+}
+
+func getAllObjectsInDir(path string, filterFiles bool) ([]ObjectInDir, error) {
+	allDirEntries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !filterFiles {
+		allDirEntries = filterFilesInDir(allDirEntries)
+	}
+
+	objectsInDir := make([]ObjectInDir, 0)
+	for _, dirEntry := range allDirEntries {
+		object, err := ConvertDirEntryToObjectInDir(&dirEntry)
+		if err != nil {
+			return nil, err
+		}
+
+		objectsInDir = append(objectsInDir, object)
+	}
+
+	return objectsInDir, nil
+}
+
 func filterFilesInDir(files []os.DirEntry) (filteredFilesInDir []os.DirEntry) {
 	for _, file := range files {
 		if file.IsDir() {
@@ -25,60 +94,48 @@ func filterFilesInDir(files []os.DirEntry) (filteredFilesInDir []os.DirEntry) {
 	return filteredFilesInDir
 }
 
-// Основная функция
 func dirTreeInner(out io.Writer, path string, printFiles bool, buffer *bytes.Buffer) error {
-	allFilesInDir, err := os.ReadDir(path)
+	allObjectsInDir, err := getAllObjectsInDir(path, printFiles)
 	if err != nil {
 		return err
 	}
 
-	if !printFiles {
-		allFilesInDir = filterFilesInDir(allFilesInDir)
+	getFilePathPrefix := func(isLast bool) string {
+		if isLast {
+			return "└"
+		}
+		return "├"
+	}
+	getInnerDirectoryPrefix := func(isLast bool) string {
+		prefix := ""
+		if !isLast {
+			prefix = "│"
+		}
+		return prefix + "\t"
 	}
 
-	for i, file := range allFilesInDir {
-		var filePath = "├"
-		if i+1 == len(allFilesInDir) {
-			filePath = "└"
-		}
-		filePath = filePath + "───" + file.Name()
+	for i, file := range allObjectsInDir {
+		isLast := (i + 1) == len(allObjectsInDir)
+		filePath := getFilePathPrefix(isLast) + "───" + file.String()
 
 		if file.IsDir() {
-			// Интересно, тут из-за append создаю дополнительный slice тупо чтобы прокинуть его в out.Write
-			// мог бы просто в два чтения это сделать без создания нового "жирного" (с большим префиксом)
-			// но решил не делать, чтобы не ухудшать и так грязный код
 			_, err = out.Write(append(buffer.Bytes(), []byte(filePath+"\n")...))
 			if err != nil {
 				return err
 			}
 
-			var newPrefix string
-			if i+1 != len(allFilesInDir) {
-				newPrefix = "│"
-			}
-			newPrefix += "\t"
-
 			// Возможно можно было бы сделать лучше, если использовать еще один флаг
 			// "последний ли я или нет"
 			// и высчитывать новый префекс прямо в начале и удалять через defer
 			// тут такое не прокатит потому что префикс меняется ДО выхода из функции
+			newPrefix := getInnerDirectoryPrefix(isLast)
 			buffer.Write([]byte(newPrefix))
-			err = dirTreeInner(out, path+"/"+file.Name(), printFiles, buffer)
+			err = dirTreeInner(out, path+"/"+file.(*Directory).Name, printFiles, buffer)
 			if err != nil {
 				return err
 			}
 			buffer.Truncate(buffer.Len() - len(newPrefix))
 		} else if printFiles {
-			fileInfo, err := file.Info()
-			if err != nil {
-				return err
-			}
-
-			outputSize := "empty"
-			if size := fileInfo.Size(); size > 0 {
-				outputSize = fmt.Sprintf("%db", size)
-			}
-			filePath = filePath + fmt.Sprintf(" (%s)", outputSize)
 			_, err = out.Write(append(buffer.Bytes(), []byte(filePath+"\n")...))
 			if err != nil {
 				return err
@@ -86,6 +143,11 @@ func dirTreeInner(out io.Writer, path string, printFiles bool, buffer *bytes.Buf
 		}
 	}
 	return nil
+
+}
+
+func dirTree(out io.Writer, path string, printFiles bool) error {
+	return dirTreeInner(out, path, printFiles, new(bytes.Buffer))
 }
 
 func main() {
