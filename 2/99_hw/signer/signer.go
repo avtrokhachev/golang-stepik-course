@@ -12,6 +12,7 @@ func ExecutePipeline(jobs ...job) error {
 	for i := range chansInput {
 		chansInput[i] = make(chan interface{})
 	}
+	defer close(chansInput[0])
 
 	var wg sync.WaitGroup
 	for i := range jobs {
@@ -20,8 +21,8 @@ func ExecutePipeline(jobs ...job) error {
 		i := i
 		go func() {
 			defer wg.Done()
+			defer close(chansInput[i+1])
 			jobs[i](chansInput[i], chansInput[i+1])
-			close(chansInput[i+1])
 		}()
 	}
 
@@ -32,40 +33,55 @@ func ExecutePipeline(jobs ...job) error {
 
 var SingleHash job = func(in, out chan interface{}) {
 	md5Mutex := sync.Mutex{}
+	wg := sync.WaitGroup{}
 	for input := range in {
-		md5Mutex.Lock()
-		md5Signer := DataSignerMd5(fmt.Sprint(input))
-		md5Mutex.Unlock()
+		wg.Add(1)
+		input := input
+		go func() {
+			defer wg.Done()
 
-		outChan := make(chan string, 0)
-		go CalcDataSignerCrc32(md5Signer, outChan)
-		md5Signer = <-outChan
+			outChanCrc32 := make(chan string, 0)
+			go CalcDataSignerCrc32(fmt.Sprint(input), outChanCrc32)
 
-		go CalcDataSignerCrc32(fmt.Sprint(input), outChan)
-		inSigner := <-outChan
+			outChanMd5 := make(chan string, 0)
+			md5Mutex.Lock()
+			go CalcDataSignerCrc32Md5(fmt.Sprint(input), outChanMd5)
+			md5Signer := <-outChanMd5
+			md5Mutex.Unlock()
 
-		out <- inSigner + "~" + md5Signer
+			inSigner := <-outChanCrc32
+
+			out <- inSigner + "~" + md5Signer
+		}()
 	}
+
+	wg.Wait()
 }
 
 var MultiHash job = func(in, out chan interface{}) {
+	var mainWg sync.WaitGroup
 	for input := range in {
-		var wg sync.WaitGroup
-		var results = make([]string, 6)
-		for i := 0; i <= 5; i++ {
-			i := i
-			wg.Add(1)
-			go func() {
-				crc32Chan := make(chan string, 0)
-				go CalcDataSignerCrc32(fmt.Sprint(i)+input.(string), crc32Chan)
-				results[i] = <-crc32Chan
-				wg.Done()
-			}()
-		}
+		mainWg.Add(1)
+		input := input
+		go func() {
+			defer mainWg.Done()
+			var wg sync.WaitGroup
+			var results = make([]string, 6)
+			for i := 0; i <= 5; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					crc32Chan := make(chan string, 0)
+					go CalcDataSignerCrc32(fmt.Sprint(i)+input.(string), crc32Chan)
+					results[i] = <-crc32Chan
+				}(i)
+			}
 
-		wg.Wait()
-		out <- strings.Join(results, "")
+			wg.Wait()
+			out <- strings.Join(results, "")
+		}()
 	}
+	mainWg.Wait()
 }
 
 var CombineResults job = func(in, out chan interface{}) {
@@ -79,4 +95,8 @@ var CombineResults job = func(in, out chan interface{}) {
 
 func CalcDataSignerCrc32(input string, out chan string) {
 	out <- DataSignerCrc32(input)
+}
+
+func CalcDataSignerCrc32Md5(input string, out chan string) {
+	out <- DataSignerCrc32(DataSignerMd5(input))
 }
