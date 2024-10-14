@@ -43,13 +43,15 @@ var SingleHash job = func(in, out chan interface{}) {
 			outChanCrc32 := make(chan string, 0)
 			go CalcDataSignerCrc32(fmt.Sprint(input), outChanCrc32)
 
-			outChanMd5 := make(chan string, 0)
 			md5Mutex.Lock()
-			go CalcDataSignerCrc32Md5(fmt.Sprint(input), outChanMd5)
-			md5Signer := <-outChanMd5
+			md5Input := DataSignerMd5(fmt.Sprint(input))
 			md5Mutex.Unlock()
 
+			outChanMd5 := make(chan string, 0)
+			go CalcDataSignerCrc32(md5Input, outChanMd5)
+
 			inSigner := <-outChanCrc32
+			md5Signer := <-outChanMd5
 
 			out <- inSigner + "~" + md5Signer
 		}()
@@ -95,8 +97,4 @@ var CombineResults job = func(in, out chan interface{}) {
 
 func CalcDataSignerCrc32(input string, out chan string) {
 	out <- DataSignerCrc32(input)
-}
-
-func CalcDataSignerCrc32Md5(input string, out chan string) {
-	out <- DataSignerCrc32(DataSignerMd5(input))
 }
