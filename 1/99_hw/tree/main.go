@@ -43,21 +43,21 @@ func (d *Directory) String() string {
 	return d.Name
 }
 
-func ConvertDirEntryToObjectInDir(dirEntry *os.DirEntry) (ObjectInDir, error) {
-	if (*dirEntry).IsDir() {
+func ConvertDirEntryToObjectInDir(dirEntry os.DirEntry) (ObjectInDir, error) {
+	if dirEntry.IsDir() {
 		return &Directory{
-			Name: (*dirEntry).Name(),
+			Name: dirEntry.Name(),
 		}, nil
 	}
 
-	fileInfo, err := (*dirEntry).Info()
+	fileInfo, err := dirEntry.Info()
 	if err != nil {
 		return nil, err
 
 	}
 
 	return &File{
-		Name: (*dirEntry).Name(),
+		Name: dirEntry.Name(),
 		Size: fileInfo.Size(),
 	}, nil
 }
@@ -74,7 +74,7 @@ func getAllObjectsInDir(path string, filterFiles bool) ([]ObjectInDir, error) {
 
 	objectsInDir := make([]ObjectInDir, 0)
 	for _, dirEntry := range allDirEntries {
-		object, err := ConvertDirEntryToObjectInDir(&dirEntry)
+		object, err := ConvertDirEntryToObjectInDir(dirEntry)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +94,7 @@ func filterFilesInDir(files []os.DirEntry) (filteredFilesInDir []os.DirEntry) {
 	return filteredFilesInDir
 }
 
-func dirTreeInner(out io.Writer, path string, printFiles bool, buffer *bytes.Buffer) error {
+func dirTreeInner(out io.Writer, path string, printFiles bool, paddingBuffer *bytes.Buffer) error {
 	allObjectsInDir, err := getAllObjectsInDir(path, printFiles)
 	if err != nil {
 		return err
@@ -119,7 +119,7 @@ func dirTreeInner(out io.Writer, path string, printFiles bool, buffer *bytes.Buf
 		filePath := getFilePathPrefix(isLast) + "───" + file.String()
 
 		if file.IsDir() {
-			_, err = out.Write(append(buffer.Bytes(), []byte(filePath+"\n")...))
+			_, err = out.Write(append(paddingBuffer.Bytes(), []byte(filePath+"\n")...))
 			if err != nil {
 				return err
 			}
@@ -129,14 +129,14 @@ func dirTreeInner(out io.Writer, path string, printFiles bool, buffer *bytes.Buf
 			// и высчитывать новый префекс прямо в начале и удалять через defer
 			// тут такое не прокатит потому что префикс меняется ДО выхода из функции
 			newPrefix := getInnerDirectoryPrefix(isLast)
-			buffer.Write([]byte(newPrefix))
-			err = dirTreeInner(out, path+"/"+file.(*Directory).Name, printFiles, buffer)
+			paddingBuffer.Write([]byte(newPrefix))
+			err = dirTreeInner(out, path+"/"+file.(*Directory).Name, printFiles, paddingBuffer)
 			if err != nil {
 				return err
 			}
-			buffer.Truncate(buffer.Len() - len(newPrefix))
+			paddingBuffer.Truncate(paddingBuffer.Len() - len(newPrefix))
 		} else if printFiles {
-			_, err = out.Write(append(buffer.Bytes(), []byte(filePath+"\n")...))
+			_, err = out.Write(append(paddingBuffer.Bytes(), []byte(filePath+"\n")...))
 			if err != nil {
 				return err
 			}
