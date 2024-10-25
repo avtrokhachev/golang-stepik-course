@@ -10,7 +10,7 @@ import (
 func ExecutePipeline(jobs ...job) error {
 	chansInput := make([]chan interface{}, len(jobs)+1)
 	for i := range chansInput {
-		chansInput[i] = make(chan interface{})
+		chansInput[i] = make(chan interface{}, 1)
 	}
 	defer close(chansInput[0])
 
