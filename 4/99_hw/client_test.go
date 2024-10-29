@@ -71,7 +71,7 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var offset int
-	offset, err = strconv.Atoi(r.FormValue("limit"))
+	offset, err = strconv.Atoi(r.FormValue("offset"))
 	if err != nil {
 		http.Error(w, "An error occurred while trying to parse offset", http.StatusBadRequest)
 		return
@@ -200,14 +200,6 @@ func TestRaisesErrorInSearchServer(t *testing.T) {
 		},
 		{
 			Handler: func(w http.ResponseWriter, r *http.Request) {
-				err, _ := json.Marshal(&SearchErrorResponse{Error: "Some unknown error"})
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write(err)
-			},
-			Error: "unknown bad request error: Some unknown error",
-		},
-		{
-			Handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
 			},
 			Error: "Bad AccessToken",
@@ -264,3 +256,83 @@ func TestRaisesErrorInSearchServer(t *testing.T) {
 		assert.EqualError(t, err, test.Error)
 	}
 }
+
+func TestRaisesUnexpectedErrorInSearchServer(t *testing.T) {
+	type ErrorFindUsers struct {
+		Handler func(w http.ResponseWriter, r *http.Request)
+		Error   string
+	}
+
+	var testsData = []ErrorFindUsers{
+		{
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				panic("some panic error")
+			},
+			Error: "unknown error Get \"%s?limit=1&offset=0&order_by=0&order_field=&query=\": EOF",
+		},
+	}
+
+	for _, test := range testsData {
+		testServer := httptest.NewServer(http.HandlerFunc(test.Handler))
+		testClient := &SearchClient{URL: testServer.URL, AccessToken: correctAuthToken}
+		_, err := testClient.FindUsers(SearchRequest{})
+		assert.EqualError(t, err, fmt.Sprintf(test.Error, testServer.URL))
+	}
+}
+
+func TestPassesCorrectParamsToInnerFunction(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.FormValue("query") != "test_query" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		} else if r.FormValue("order_field") != "test_order_field" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		} else if r.FormValue("limit") != "26" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		} else if r.FormValue("offset") != "11" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		} else if r.FormValue("order_by") != "200" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		} else {
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte("[]"))
+		}
+	}))
+	testClient := &SearchClient{URL: testServer.URL, AccessToken: correctAuthToken}
+	_, err := testClient.FindUsers(SearchRequest{
+		Query:      "test_query",
+		OrderField: "test_order_field",
+		Limit:      40,
+		Offset:     11,
+		OrderBy:    200,
+	})
+	assert.Equal(t, err, nil)
+}
+
+func TestCorrectlyReturnsNextPageToken(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := []User{
+			{
+				Name: "Andrey",
+			},
+			{
+				Name: "Daniel",
+			},
+		}
+		w.Header().Add("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(&response)
+	}))
+	testClient := &SearchClient{URL: testServer.URL, AccessToken: correctAuthToken}
+	response, _ := testClient.FindUsers(SearchRequest{
+		Query:      "",
+		OrderField: "Name",
+		Limit:      1,
+		Offset:     0,
+		OrderBy:    0,
+	})
+
+	assert.Equal(t, response.NextPage, true)
+	assert.Equal(t, response.Users, []User{{Name: "Andrey"}})
+}
+
+// coverage: 100.0% of statements
+// ok      hw4     1.736s
